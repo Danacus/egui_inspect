@@ -23,9 +23,12 @@ struct MyApp {
     #[inspect(name = "A proper field name")]
     ugly_internal_field_name: u16,
     #[inspect(name = "A tuple struct")]
-    ugly_internal_field_name_2: Salut,
+    ugly_internal_field_name_2: Foo,
     #[inspect(name = "A struct with three floats")]
     vector_struct: Vector,
+    my_enum: MyEnum,
+    #[inspect(no_edit)]
+    my_enum_readonly: MyEnum,
 }
 
 impl Default for MyApp {
@@ -35,35 +38,46 @@ impl Default for MyApp {
             code: "Hello\nI\nam\na\nmultiline\nstring".to_owned(),
             _skipped: true,
             unsigned32: 42,
-            strings: vec!{"Bonjour".to_string(),
-                          "Voici une liste de string".to_string(),
-                          "Avec plusieurs strings".to_string()},
+            strings: vec![
+                "Bonjour".to_string(),
+                "Voici une liste de string".to_string(),
+                "Avec plusieurs strings".to_string(),
+            ],
             raw_string: "YetAnotherString",
             float64: 6.0,
             ugly_internal_field_name: 16,
-            ugly_internal_field_name_2: Salut(50, 123.45),
-            vector_struct: Vector { x: 10.0, y: 20.0, z: 30.0 },
+            ugly_internal_field_name_2: Foo(50, 123.45),
+            vector_struct: Vector {
+                x: 10.0,
+                y: 20.0,
+                z: 30.0,
+            },
+            my_enum: MyEnum::AnOptionWithStructData {
+                vec: Default::default(),
+                foo: Default::default(),
+            },
+            my_enum_readonly: MyEnum::AnOptionWithNoData,
         }
     }
 }
 
-#[derive(EguiInspect)]
-struct Salut(i32, f32);
+#[derive(EguiInspect, PartialEq, Default)]
+struct Foo(i32, f32);
 
-#[derive(EguiInspect)]
-struct Vector { 
+#[derive(EguiInspect, PartialEq, Default)]
+struct Vector {
     #[inspect(name = "X axis")]
-    x: f32, 
+    x: f32,
     #[inspect(name = "Y axis")]
-    y: f32, 
+    y: f32,
     #[inspect(name = "Z axis")]
-    z: f32 
+    z: f32,
 }
 
-
-fn custom_bool_inspect(boolean: &mut bool, label: &'static str, ui: &mut egui::Ui) {
-    ui.label("C'EST LA GIGA FONCTION CUSTOM WÉ");
-    boolean.inspect(label, ui);
+#[derive(EguiInspect, PartialEq)]
+enum MyEnum {
+    AnOptionWithNoData,
+    AnOptionWithStructData { vec: Vector, foo: Foo },
 }
 
 impl eframe::App for MyApp {
@@ -72,8 +86,8 @@ impl eframe::App for MyApp {
             self.inspect_mut("Test App", ui);
             // self.inspect("Test App", ui);
 
-            let salut = Salut(1, 2.0);
-            salut.inspect("label for tuple struct", ui);
+            let foo = Foo(1, 2.0);
+            foo.inspect("label for tuple struct", ui);
         });
 
         // Resize the native window to be just the size we need it to be:
@@ -83,5 +97,9 @@ impl eframe::App for MyApp {
 
 fn main() {
     let options = eframe::NativeOptions::default();
-    eframe::run_native("My egui App", options, Box::new(|_cc| Box::new(MyApp::default())));
+    let _ = eframe::run_native(
+        "My egui App",
+        options,
+        Box::new(|_cc| Box::new(MyApp::default())),
+    );
 }
