@@ -1,17 +1,15 @@
 use proc_macro2::TokenStream;
-use quote::quote_spanned;
+use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::Type::{Path, Reference};
-use syn::{Field, Type};
+use syn::{Field, Ident, Type};
 
 use crate::AttributeArgs;
 
 pub fn get_path_str(type_path: &Type) -> Option<String> {
     match type_path {
         Path(type_path) => {
-            let ident = type_path
-                .path
-                .get_ident();
+            let ident = type_path.path.get_ident();
             if let Some(name) = ident {
                 return Some(name.to_string());
             }
@@ -22,17 +20,17 @@ pub fn get_path_str(type_path: &Type) -> Option<String> {
     }
 }
 
-pub(crate) fn get_default_function_call(field: &Field, mutable: bool, attrs: &AttributeArgs) -> TokenStream {
-    let name = &field.ident;
-
-    let name_str = match &attrs.name {
-        Some(n) => n.clone(),
-        None => name.clone().unwrap().to_string(),
-    };
-
-    return if mutable {
-        quote_spanned! {field.span() => {egui_inspect::EguiInspect::inspect_mut(&mut self.#name, &#name_str, ui);}}
+pub(crate) fn get_default_function_call(
+    name: &str,
+    field: &TokenStream,
+    mutable: bool,
+) -> TokenStream {
+    let ref_str = if mutable { quote!(&mut) } else { quote!(&) };
+    let inspect = if mutable {
+        quote!(inspect_mut)
     } else {
-        quote_spanned! {field.span() => {egui_inspect::EguiInspect::inspect(&self.#name, &#name_str, ui);}}
+        quote!(inspect)
     };
+
+    quote! { egui_inspect::EguiInspect::#inspect(#ref_str #field, #name, ui); }
 }

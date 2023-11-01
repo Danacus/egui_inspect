@@ -1,17 +1,17 @@
 use proc_macro2::{Ident, TokenStream};
-use quote::{quote, quote_spanned};
+use quote::{quote, quote_spanned, format_ident, ToTokens};
 use syn::spanned::Spanned;
 use syn::{
     parse_macro_input, parse_quote, Data, DataEnum, DeriveInput, Field, Fields, FieldsNamed,
     GenericParam, Generics, Index, Variant, FieldsUnnamed,
 };
 
-use darling::{FromField, FromMeta};
+use darling::{FromField, FromMeta, FromVariant};
 
 mod internal_paths;
 mod utils;
 
-#[derive(Debug, FromField)]
+#[derive(Debug, FromField, FromVariant)]
 #[darling(attributes(inspect), default)]
 struct AttributeArgs {
     /// Name of the field to be displayed on UI labels
@@ -59,9 +59,9 @@ pub fn derive_egui_inspect(input: proc_macro::TokenStream) -> proc_macro::TokenS
     let generics = add_trait_bounds(input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let inspect = inspect_struct(&input.data, &name, false);
+    let inspect = inspect_data(&input.data, &name, false);
 
-    let inspect_mut = inspect_struct(&input.data, &name, true);
+    let inspect_mut = inspect_data(&input.data, &name, true);
 
     let expanded = quote! {
         impl #impl_generics egui_inspect::EguiInspect for #name #ty_generics #where_clause {
@@ -88,67 +88,70 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
     generics
 }
 
-fn inspect_struct(data: &Data, _struct_name: &Ident, mutable: bool) -> TokenStream {
+fn inspect_data(data: &Data, name: &Ident, mutable: bool) -> TokenStream {
     match *data {
-        Data::Struct(ref data) => handle_fields(&data.fields, mutable),
-        Data::Enum(ref data_enum) => handle_enum(data_enum, _struct_name, mutable),
+        Data::Struct(ref data) => {
+            let fields = inspect_fields(&data.fields, true, mutable);
+            quote! {
+                ui.strong(label);
+                #(#fields)*
+            }
+        },
+        Data::Enum(ref data_enum) => inspect_enum(data_enum, name, mutable),
         Data::Union(_) => unimplemented!("Unions are not yet supported"),
     }
 }
 
-fn handle_enum(data_enum: &DataEnum, _struct_name: &Ident, mutable: bool) -> TokenStream {
+fn inspect_enum(data_enum: &DataEnum, name: &Ident, mutable: bool) -> TokenStream {
     let variants: Vec<_> = data_enum.variants.iter().collect();
-    let name_arms = variants.iter().map(|v| variant_name_arm(v, _struct_name));
+    let name_arms = variants.iter().map(|v| variant_name_arm(v, name));
     let reflect_variant_name = quote!(
         let current_variant = match self {
             #(#name_arms,)*
         };
-);
-    if mutable {
-        let combo_opts = variants.iter().map(|v| variant_combo(v, _struct_name));
-        let inspect_arms = variants.iter().map(|v| variant_inspect_arm(v, _struct_name));
-        quote!(
-            #reflect_variant_name
+    );
+    let combo_opts = variants.iter().map(|v| variant_combo(v, name));
+    let combo = if mutable {
+        quote!{
             ui.horizontal(|ui| {
-                ui.label(stringify!(#_struct_name));
                 ::egui::ComboBox::new(label, "")
                     .selected_text(current_variant)
                     .show_ui(ui, |ui| {
                         #(#combo_opts;)*
                     });
             });
-            match self {
-                #(#inspect_arms),*
-            };
-        )
-    } else { 
-        quote!(
-            #reflect_variant_name
-            ui.label(format!("{label}: {current_variant}").as_str());
-            // TODO: readonly held data inspect
-        )
-    }
+        }        
+    } else {
+        quote!(ui.label(current_variant);)
+    };
+    let inspect_arms = variants.iter().map(|v| variant_inspect_arm(v, name, mutable));
+    quote!(
+        #reflect_variant_name
+        ui.strong(label);
+        #combo
+        match self {
+            #(#inspect_arms),*
+        };
+    )
 }
 
-fn variant_name_arm(variant: &Variant, _struct_name: &Ident) -> TokenStream {
+fn variant_name_arm(variant: &Variant, struct_name: &Ident) -> TokenStream {
     let ident = &variant.ident;
     match &variant.fields {
         Fields::Named(_) => {
-            quote!(#_struct_name::#ident {..} => stringify!(#ident))
+            quote!(#struct_name::#ident {..} => stringify!(#ident))
         }
         Fields::Unnamed(_) => {
-            quote!(#_struct_name::#ident (..) => stringify!(#ident))
+            quote!(#struct_name::#ident (..) => stringify!(#ident))
         }
         Fields::Unit => {
-            quote!(#_struct_name::#ident => stringify!(#ident))
+            quote!(#struct_name::#ident => stringify!(#ident))
         }
     }
 }
 
-fn variant_combo(variant: &Variant, _struct_name: &Ident) -> TokenStream {
+fn variant_combo(variant: &Variant, struct_name: &Ident) -> TokenStream {
     let ident = &variant.ident;
-    // TODO: Replace with handle_fields,
-    // which would need to take this ident as the base for fields instead of "self".
     match &variant.fields {
         Fields::Named(fields) => {
             let defaults = fields
@@ -159,7 +162,7 @@ fn variant_combo(variant: &Variant, _struct_name: &Ident) -> TokenStream {
                     quote!( #ident: Default::default() )}
                 );
             quote!(ui.selectable_value(self, 
-                                       #_struct_name::#ident { #(#defaults),* }, 
+                                       #struct_name::#ident { #(#defaults),* }, 
                                        stringify!(#ident)))
         }
         Fields::Unnamed(fields) => {
@@ -167,49 +170,48 @@ fn variant_combo(variant: &Variant, _struct_name: &Ident) -> TokenStream {
                 .unnamed
                 .iter()
                 .map(|_| quote!(Default::default()));
-            quote!(ui.selectable_value(self, #_struct_name::#ident ( #(#defaults),* ), stringify!(#ident)))
+            quote!(ui.selectable_value(self, #struct_name::#ident ( #(#defaults),* ), stringify!(#ident)))
         }
         Fields::Unit => {
-            quote!(ui.selectable_value(self, #_struct_name::#ident, stringify!(#ident)))
+            quote!(ui.selectable_value(self, #struct_name::#ident, stringify!(#ident)))
         }
     }
 }
 
-fn variant_inspect_arm(variant: &Variant, _struct_name: &Ident) -> TokenStream {
+fn variant_inspect_arm(variant: &Variant, struct_name: &Ident, mutable: bool) -> TokenStream {
     let ident = &variant.ident;
+    let inspect_fields = inspect_fields(&variant.fields, false, mutable);
     match &variant.fields {
         Fields::Named(fields) => {
-            let field_idents: Vec<_> = fields
+            let field_idents = fields
                 .named
                 .iter()
                 .map(|f| {
-                    let ident = f.ident.clone();
+                    let ident = &f.ident;
                     quote!( #ident )}
-                ).collect();
-            // TODO: properly refer to trait
-            let inspect_fields = field_idents.iter().map(|f| quote!(#f.inspect_mut(stringify!(#f), ui)));
-            quote!(#_struct_name::#ident { #(#field_idents),* } => { #(#inspect_fields;)* })
+                );
+            quote!(#struct_name::#ident { #(#field_idents),* } => { #(#inspect_fields)* })
         }
-        Fields::Unnamed(_) => {
-            unimplemented!("TODO: unnamed")
+        Fields::Unnamed(fields) => {
+            let field_idents = (0..fields.unnamed.len()).map(|i| format_ident!("__field{}", i));
+            quote!(#struct_name::#ident(#(#field_idents),*) => { #(#inspect_fields)* })
         }
         Fields::Unit => {
-            quote!(#_struct_name::#ident => () )
+            quote!(#struct_name::#ident => () )
         }
     }
 }
 
-fn handle_fields(fields: &Fields, mutable: bool) -> TokenStream {
+fn inspect_fields(fields: &Fields, use_self: bool, mutable: bool) -> Vec<TokenStream> {
     match fields {
-        Fields::Named(ref fields) => handle_named_fields(fields, mutable),
-        Fields::Unnamed(ref fields) => handle_unnamed_fields(fields, mutable), 
-        // Empty implementation for unit fields (needed in plain enum variant for instance)
-        Fields::Unit => quote!(),
+        Fields::Named(ref fields) => inspect_named_fields(fields, use_self, mutable),
+        Fields::Unnamed(ref fields) => inspect_unnamed_fields(fields, use_self, mutable), 
+        Fields::Unit => Vec::new(),
     }
 }
 
-fn handle_named_fields(fields: &FieldsNamed, mutable: bool) -> TokenStream {
-    let recurse = fields.named.iter().map(|f| {
+fn inspect_named_fields(fields: &FieldsNamed, use_self: bool, mutable: bool) -> Vec<TokenStream> {
+    fields.named.iter().map(|f| {
         let attr = AttributeArgs::from_field(f).expect("Could not get attributes from field");
 
         if attr.hide {
@@ -226,30 +228,33 @@ fn handle_named_fields(fields: &FieldsNamed, mutable: bool) -> TokenStream {
             return ts;
         }
 
-        return utils::get_default_function_call(&f, mutable, &attr);
-    });
-    quote! {
-        ui.strong(label);
-        #(#recurse)*
-    }
+        let name_str = match &attr.name {
+            Some(n) => n.clone(),
+            None => f.ident.to_token_stream().to_string(),
+        };
+        let ident = &f.ident;
+        let var = if use_self {
+            quote!(self.#ident)
+        } else {
+            quote!(*#ident)
+        };
+        utils::get_default_function_call(&name_str, &var, mutable)
+    }).collect()
 }
 
-fn handle_unnamed_fields(fields: &FieldsUnnamed, mutable: bool) -> TokenStream {
-    let mut recurse = Vec::new();
-    for (i, _) in fields.unnamed.iter().enumerate() {
+fn inspect_unnamed_fields(fields: &FieldsUnnamed, use_self: bool, mutable: bool) -> Vec<TokenStream> {
+    fields.unnamed.iter().enumerate().map(|(i, _)| {
         let tuple_index = Index::from(i);
         let name = format!("Field {i}");
-        let ref_str = if mutable { quote!(&mut) } else { quote!(&) };
-        recurse.push(
-            quote! { egui_inspect::EguiInspect::inspect(#ref_str self.#tuple_index, #name, ui);},
-        );
-    }
 
-    let result = quote! {
-        ui.strong(label);
-        #(#recurse)*
-    };
-    result
+        let var = if use_self { 
+            quote!(self.#tuple_index) 
+        } else { 
+            let ident = format_ident!("__field{}", tuple_index);
+            quote!(*#ident)
+        };
+        utils::get_default_function_call(&name, &var, mutable)
+    }).collect()
 }
 
 fn handle_custom_func(field: &Field, mutable: bool, attrs: &AttributeArgs) -> Option<TokenStream> {
@@ -264,7 +269,8 @@ fn handle_custom_func(field: &Field, mutable: bool, attrs: &AttributeArgs) -> Op
         let custom_func_mut = attrs.custom_func_mut.as_ref().unwrap();
         let ident = syn::Path::from_string(custom_func_mut)
             .expect(format!("Could not find function: {}", custom_func_mut).as_str());
-        return Some(quote_spanned! { field.span() => {
+        return Some(quote_spanned! { field.span() => 
+            {
                 #ident(&mut self.#name, &#name_str, ui);
             }
         });
@@ -274,7 +280,8 @@ fn handle_custom_func(field: &Field, mutable: bool, attrs: &AttributeArgs) -> Op
         let custom_func = attrs.custom_func.as_ref().unwrap();
         let ident = syn::Path::from_string(custom_func)
             .expect(format!("Could not find function: {}", custom_func).as_str());
-        return Some(quote_spanned! { field.span() => {
+        return Some(quote_spanned! { field.span() => 
+            {
                 #ident(&self.#name, &#name_str, ui);
             }
         });

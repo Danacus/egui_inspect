@@ -52,11 +52,11 @@ impl Default for MyApp {
                 y: 20.0,
                 z: 30.0,
             },
-            my_enum: MyEnum::AnOptionWithStructData {
+            my_enum: MyEnum::StructData {
                 vec: Default::default(),
                 foo: Default::default(),
             },
-            my_enum_readonly: MyEnum::AnOptionWithNoData,
+            my_enum_readonly: MyEnum::Unnamed(0, 10),
         }
     }
 }
@@ -76,8 +76,9 @@ struct Vector {
 
 #[derive(EguiInspect, PartialEq)]
 enum MyEnum {
-    AnOptionWithNoData,
-    AnOptionWithStructData { vec: Vector, foo: Foo },
+    NoData,
+    StructData { vec: Vector, foo: Foo },
+    Unnamed(usize, usize),
 }
 
 impl eframe::App for MyApp {
