@@ -4,3 +4,7 @@ members = [
     "egui_inspect",
     "egui_inspect_derive"
 ]
+
+[workspace.dependencies]
+eframe = "0.23"
+egui = "0.23"
